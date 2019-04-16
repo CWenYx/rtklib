@@ -1,6 +1,6 @@
 include $(TOPDIR)/rules.mk
 
-PKG_NAME:=RTKLIB
+PKG_NAME:=rtklib
 PKG_VERSION:=2.4.3_b31
 PKG_RELEASE:=$(PKG_SOURCE_VERSION)
 
@@ -18,7 +18,7 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)
 
 include $(INCLUDE_DIR)/package.mk
 
-define Package/RTKLIB/default
+define Package/rtklib/default
   SUBMENU:=RTKLIB Suite
   SECTION:=utils
   CATEGORY:=Utilities
@@ -27,27 +27,27 @@ define Package/RTKLIB/default
 endef
 
 #define Package/convbin
-#$(call Package/RTKLIB/default)
+#$(call Package/rtklib/default)
 #  TITLE:=RINEX Converter
 #endef
 
 #define Package/pos2kml
-#$(call Package/RTKLIB/default)
+#$(call Package/rtklib/default)
 #  TITLE:=Solution to KML converter
 #endef
 
 #define Package/rnx2rtkp
-#$(call Package/RTKLIB/default)
+#$(call Package/rtklib/default)
 #  TITLE:=Post-Processing Analysis
 #endef
 
 define Package/rtkrcv
-$(call Package/RTKLIB/default)
+$(call Package/rtklib/default)
   TITLE:=Real-Time Positioning
 endef
 
 define Package/str2str
-$(call Package/RTKLIB/default)
+$(call Package/rtklib/default)
   TITLE:=Communication Server
 endef
 
