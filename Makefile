@@ -1,4 +1,4 @@
-include ../../rules.mk
+include $(TOPDIR)/rules.mk
 
 PKG_NAME:=RTKLIB
 PKG_VERSION:=2.4.3_b31
