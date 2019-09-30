@@ -65,13 +65,15 @@ static const char *help[]={
 "",
 "  stream path",
 "    serial       : serial://port[:brate[:bsize[:parity[:stopb[:fctr]]]]]",
-"    tcp server   : tcpsvr://:port",
-"    tcp client   : tcpcli://addr[:port]",
-"    ntrip client : ntrip://[user[:passwd]@]addr[:port][/mntpnt]",
-"    ntrip server : ntrips://[:passwd@]addr[:port]/mntpnt[:str] (only out)",
+"    tcp server   : tcpsvr://%port",
+"    tcp client   : tcpcli://addr[%port]",
+"    ntrip client : ntrip://[user[:passwd]@]addr[%port][/mntpnt]",
+"    ntrip server : ntrips://[:passwd@]addr[%port]/mntpnt[:str] (only out)",
 "    ntrip caster server: ntripc_s://[:passwd@][:port] (only in)",
 "    ntrip caster client: ntripc_c://[user:passwd@][:port]/mntpnt (only out)",
 "    file         : [file://]path[::T][::+start][::xseppd][::S=swap]",
+"    tcp server base ipv6   : tcpsvr6://%port",
+"    tcp client base ipv6  : tcpcli6://addr[%port]",
 "",
 "  format",
 "    rtcm2        : RTCM 2 (only in)",
@@ -187,6 +189,8 @@ static int decodepath(const char *path, int *type, char *strpath, int *fmt)
     else if (!strncmp(path,"ntrips",  6)) *type=STR_NTRIPSVR;
     else if (!strncmp(path,"ntrip",   5)) *type=STR_NTRIPCLI;
     else if (!strncmp(path,"file",    4)) *type=STR_FILE;
+	else if (!strncmp(path, "tcpsvr6", 7)) *type = STR_TCPSVR6;
+	else if (!strncmp(path, "tcpcli6", 7)) *type = STR_TCPCLI6;
     else {
         fprintf(stderr,"stream path error: %s\n",buff);
         return 0;

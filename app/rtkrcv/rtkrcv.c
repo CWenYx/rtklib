@@ -165,22 +165,24 @@ static const char *pathopts[]={         /* path options help */
     "stream path formats",
     "serial   : port[:bit_rate[:byte[:parity(n|o|e)[:stopb[:fctr(off|on)]]]]]",
     "file     : path[::T[::+offset][::xspeed]]",
-    "tcpsvr   : :port",
-    "tcpcli   : addr:port",
-    "ntripsvr : user:passwd@addr:port/mntpnt[:str]",
-    "ntripcli : user:passwd@addr:port/mntpnt",
+    "tcpsvr   : %port",
+    "tcpcli   : addr%port",
+    "ntripsvr : user:passwd@addr%port/mntpnt[:str]",
+    "ntripcli : user:passwd@addr%port/mntpnt",
     "ntripc_s : :passwd@:port",
     "ntripc_c : user:passwd@:port",
     "ftp      : user:passwd@addr/path[::T=poff,tint,off,rint]",
     "http     : addr/path[::T=poff,tint,off,rint]",
+	"tcpsvr6  : %port",
+	"tcpcli6  : addr%port",
     ""
 };
 /* receiver options table ----------------------------------------------------*/
 #define TIMOPT  "0:gpst,1:utc,2:jst,3:tow"
 #define CONOPT  "0:dms,1:deg,2:xyz,3:enu,4:pyl"
 #define FLGOPT  "0:off,1:std+2:age/ratio/ns"
-#define ISTOPT  "0:off,1:serial,2:file,3:tcpsvr,4:tcpcli,7:ntripcli,8:ftp,9:http"
-#define OSTOPT  "0:off,1:serial,2:file,3:tcpsvr,4:tcpcli,6:ntripsvr,11:ntripc_c"
+#define ISTOPT  "0:off,1:serial,2:file,3:tcpsvr,4:tcpcli,7:ntripcli,8:ftp,9:http,15:tcpsvr6,16:tcpcli6"
+#define OSTOPT  "0:off,1:serial,2:file,3:tcpsvr,4:tcpcli,6:ntripsvr,11:ntripc_c,15:tcpsvr6,16:tcpcli6"
 #define FMTOPT  "0:rtcm2,1:rtcm3,2:oem4,3:oem3,4:ubx,5:swiftnav,6:hemis,7:skytraq,8:gw10,9:javad,10:nvs,11:binex,12:rt17,13:sbf,14:cmr,15:tersus,18:sp3"
 #define NMEOPT  "0:off,1:latlon,2:single"
 #define SOLOPT  "0:llh,1:xyz,2:enu,3:nmea,4:stat"
@@ -934,7 +936,7 @@ static void prstream(vt_t *vt)
     };
     const char *type[]={
         "-","serial","file","tcpsvr","tcpcli","udp","ntrips","ntripc","ftp",
-        "http","ntripc_s","ntripc_c"
+        "http","ntripc_s","ntripc_c","tcpsvr6","tcpcli6"
     };
     const char *fmt[]={"rtcm2","rtcm3","oem4","oem3","ubx","sbp","hemis","skytreq",
                        "gw10","javad","nvs","binex","rt17","sbf","cmr","trs","","","sp3",""};

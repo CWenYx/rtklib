@@ -438,6 +438,8 @@ extern "C" {
 #define STR_UDPSVR   12                 /* stream type: UDP server */
 #define STR_UDPCLI   13                 /* stream type: UDP server */
 #define STR_MEMBUF   14                 /* stream type: memory buffer */
+#define STR_TCPSVR6  15					/* stream type: TCP server based ipv6 */
+#define STR_TCPCLI6  16					/* stream type: TCP client based ipv6 */
 
 #define STRFMT_RTCM2 0                  /* stream format: RTCM 2 */
 #define STRFMT_RTCM3 1                  /* stream format: RTCM 3 */

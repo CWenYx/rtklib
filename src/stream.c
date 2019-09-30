@@ -155,6 +155,7 @@ typedef struct {            /* tcp control type */
     char saddr[256];        /* address string */
     int port;               /* port */
     struct sockaddr_in addr; /* address resolved */
+	struct sockaddr_in6 addr6; /* address resolved */
     socket_t sock;          /* socket descriptor */
     int tcon;               /* reconnect time (ms) (-1:never,0:now) */
     unsigned int tact;      /* data active tick */
@@ -911,7 +912,7 @@ static void syncfile(file_t *file1, file_t *file2)
     file2->repmode=1;
     file2->offset=(int)(file1->tick_f-file2->tick_f);
 }
-/* decode tcp/ntrip path (path=[user[:passwd]@]addr[:port][/mntpnt[:str]]) ---*/
+/* decode tcp/ntrip path (path=[user[:passwd]@]addr[%port][/mntpnt[:str]]) ---*/
 static void decodetcppath(const char *path, char *addr, char *port, char *user,
                           char *passwd, char *mntpnt, char *str)
 {
@@ -944,7 +945,7 @@ static void decodetcppath(const char *path, char *addr, char *port, char *user,
     }
     else p=buff;
     
-    if ((q=strchr(p,':'))) {
+    if ((q=strrchr(p,'%'))) {
         *q='\0'; if (port) strcpy(port,q+1);
     }
     if (addr) strcpy(addr,p);
@@ -1053,6 +1054,63 @@ static int send_nb(socket_t sock, unsigned char *buff, int n)
     ns=send(sock,(char *)buff,n,0);
     return ns<n?-1:ns;
 }
+/* get host by name*/
+static int gethost(tcp_t *tcp, int ip_type, char *msg) {
+#ifdef WIN32
+	struct addrinfo *res;
+	if (getaddrinfo(tcp->saddr, NULL, NULL, &res)) {
+		sprintf(msg, "address error (%s)", tcp->saddr);
+		closesocket(tcp->sock);
+		tcp->state = 0;
+		tcp->tcon = ticonnect;
+		tcp->tdis = tickget();
+		return 0;
+	}
+	if (ip_type == 4) {
+		struct sockaddr *temp_addr=res->ai_addr;
+		struct sockaddr_in *s4 = (struct sockaddr_in *)temp_addr;
+		memcpy(&tcp->addr.sin_addr, &(s4->sin_addr), sizeof(s4->sin_addr));
+		return 1;
+	}
+	else if (ip_type == 6) {
+		struct sockaddr *temp_addr=res->ai_addr;
+		struct sockaddr_in6 *s6 = (struct sockaddr_in6 *)temp_addr;
+		memcpy(&tcp->addr6.sin6_addr, &(s6->sin6_addr), sizeof(s6->sin6_addr));
+		return 1;
+	}
+	else return 0;
+#else
+	struct hostent *hp;
+	if(ip_type==4){
+		if (!(hp=gethostbyname(tcp->saddr))) {
+            sprintf(msg,"address error (%s)",tcp->saddr);
+            tracet(1,"gethost: gethostbyname error addr=%s err=%d\n",tcp->saddr,errsock());
+            closesocket(tcp->sock);
+            tcp->state=0;
+            tcp->tcon=ticonnect;
+            tcp->tdis=tickget();
+            return 0;
+        }
+        memcpy(&tcp->addr.sin_addr,hp->h_addr,hp->h_length);
+        return 1;
+	}
+	else if(ip_type==6){
+		 if (!(hp=gethostbyname2(tcp->saddr,AF_INET6))) {
+            sprintf(msg,"address error (%s)",tcp->saddr);
+            tracet(1,"gethost: gethostbyname error addr=%s err=%d\n",tcp->saddr,errsock());
+            closesocket(tcp->sock);
+            tcp->state=0;
+            tcp->tcon=ticonnect;
+            tcp->tdis=tickget();
+            return 0;
+        }
+        memcpy(&tcp->addr6.sin6_addr,hp->h_addr,hp->h_length);
+        return 1;
+	}
+	else return 0;
+#endif
+}
+
 /* generate tcp socket -------------------------------------------------------*/
 static int gentcp(tcp_t *tcp, int type, char *msg)
 {
@@ -1062,21 +1120,37 @@ static int gentcp(tcp_t *tcp, int type, char *msg)
 #endif
     
     tracet(3,"gentcp: type=%d\n",type);
-    
-    /* generate socket */
-    if ((tcp->sock=socket(AF_INET,SOCK_STREAM,0))==(socket_t)-1) {
-        sprintf(msg,"socket error (%d)",errsock());
-        tracet(1,"gentcp: socket error err=%d\n",errsock());
-        tcp->state=-1;
-        return 0;
-    }
-    if (!setsock(tcp->sock,msg)) {
-        tcp->state=-1;
-        return 0;
-    }
-    memset(&tcp->addr,0,sizeof(tcp->addr));
-    tcp->addr.sin_family=AF_INET;
-    tcp->addr.sin_port=htons(tcp->port);
+	/* generate socket */
+	if (type == 0 || type == 1) {
+		if ((tcp->sock = socket(AF_INET, SOCK_STREAM, 0)) == (socket_t)-1) {
+			sprintf(msg, "socket error (%d)", errsock());
+			tracet(1, "gentcp: socket error err=%d\n", errsock());
+			tcp->state = -1;
+			return 0;
+		}
+		if (!setsock(tcp->sock, msg)) {
+			tcp->state = -1;
+			return 0;
+		}
+		memset(&tcp->addr, 0, sizeof(tcp->addr));
+		tcp->addr.sin_family = AF_INET;
+		tcp->addr.sin_port = htons(tcp->port);
+	}
+	else { /* ipv6 socket */
+		if ((tcp->sock = socket(AF_INET6, SOCK_STREAM, 0)) == (socket_t)-1) {
+			sprintf(msg, "socket error (%d)", errsock());
+			tracet(1, "gentcp: socket error err=%d\n", errsock());
+			tcp->state = -1;
+			return 0;
+		}
+		if (!setsock(tcp->sock, msg)) {
+			tcp->state = -1;
+			return 0;
+		}
+		memset(&tcp->addr6, 0, sizeof(tcp->addr6));
+		tcp->addr6.sin6_family = AF_INET6;
+		tcp->addr6.sin6_port = htons(tcp->port);
+	}
     
     if (type==0) { /* server socket */
     
@@ -1094,7 +1168,7 @@ static int gentcp(tcp_t *tcp, int type, char *msg)
         }
         listen(tcp->sock,5);
     }
-    else { /* client socket */
+    else if(type==1){ /* client socket */
         if (!(hp=gethostbyname(tcp->saddr))) {
             sprintf(msg,"address error (%s)",tcp->saddr);
             tracet(1,"gentcp: gethostbyname error addr=%s err=%d\n",tcp->saddr,errsock());
@@ -1105,7 +1179,25 @@ static int gentcp(tcp_t *tcp, int type, char *msg)
             return 0;
         }
         memcpy(&tcp->addr.sin_addr,hp->h_addr,hp->h_length);
-    }
+	}
+	else if(type==2){ /* server socket based ipv6*/
+
+#ifdef _SVR_REUSEADDR
+/* multiple-use of server socket */
+		setsockopt(tcp->sock, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt,
+			sizeof(opt));
+#endif
+		if (bind(tcp->sock, (struct sockaddr *)&tcp->addr6, sizeof(tcp->addr6)) == -1) {
+			sprintf(msg, "bind error (%d) : %d", errsock(), tcp->port);
+			closesocket(tcp->sock);
+			tcp->state = -1;
+			return 0;
+		}
+		listen(tcp->sock, 5);
+	}
+	else{ /* client socket based ipv6 */
+		if (!gethost(tcp, 6, msg)) return 0;
+	}
     tcp->state=1;
     tcp->tact=tickget();
     tracet(5,"gentcp: exit sock=%d\n",tcp->sock);
@@ -1145,6 +1237,30 @@ static tcpsvr_t *opentcpsvr(const char *path, char *msg)
     tcpsvr->svr.tcon=0;
     return tcpsvr;
 }
+/* open ipv6 tcp server -----------------------------------------------------------*/
+static tcpsvr_t *opentcpsvr6(const char *path, char *msg)
+{
+	tcpsvr_t *tcpsvr, tcpsvr0 = { {0} };
+	char port[256] = "";
+
+	tracet(3, "opentcpsvr6: path=%s\n", path);
+
+	if (!(tcpsvr = (tcpsvr_t *)malloc(sizeof(tcpsvr_t)))) return NULL;
+	*tcpsvr = tcpsvr0;
+	decodetcppath(path, tcpsvr->svr.saddr, port, NULL, NULL, NULL, NULL);
+	if (sscanf(port, "%d", &tcpsvr->svr.port) < 1) {
+		sprintf(msg, "port error: %s", port);
+		tracet(1, "opentcpsvr6: port error port=%s\n", port);
+		free(tcpsvr);
+		return NULL;
+	}
+	if (!gentcp(&tcpsvr->svr, 2, msg)) {
+		free(tcpsvr);
+		return NULL;
+	}
+	tcpsvr->svr.tcon = 0;
+	return tcpsvr;
+}
 /* close tcp server ----------------------------------------------------------*/
 static void closetcpsvr(tcpsvr_t *tcpsvr)
 {
@@ -1182,32 +1298,55 @@ static void updatetcpsvr(tcpsvr_t *tcpsvr, char *msg)
     if (n==1) sprintf(msg,"%s",saddr); else sprintf(msg,"%d clients",n);
 }
 /* accept client connection --------------------------------------------------*/
-static int accsock(tcpsvr_t *tcpsvr, char *msg)
+static int accsock(tcpsvr_t *tcpsvr, char *msg, int ip_type)
 {
     struct sockaddr_in addr;
+	struct sockaddr_in6 addr6;
     socket_t sock;
     socklen_t len=sizeof(addr);
+	socklen_t len6 = sizeof(addr6);
     int i,err;
     
     tracet(4,"accsock: sock=%d\n",tcpsvr->svr.sock);
     
     for (i=0;i<MAXCLI;i++) if (tcpsvr->cli[i].state==0) break;
     if (i>=MAXCLI) return 0; /* too many client */
+	if (ip_type == 4) {
+		if ((sock = accept_nb(tcpsvr->svr.sock, (struct sockaddr *)&addr, &len)) == (socket_t)-1) {
+			err = errsock();
+			sprintf(msg, "accept error (%d)", err);
+			tracet(1, "accsock: accept error sock=%d err=%d\n", tcpsvr->svr.sock, err);
+			closesocket(tcpsvr->svr.sock);
+			tcpsvr->svr.state = 0;
+			return 0;
+		}
+	}
+	else
+	{
+		if ((sock = accept_nb(tcpsvr->svr.sock, (struct sockaddr *)&addr6, &len6)) == (socket_t)-1) {
+			err = errsock();
+			sprintf(msg, "accept error (%d)", err);
+			tracet(1, "accsock: accept error sock=%d err=%d\n", tcpsvr->svr.sock, err);
+			closesocket(tcpsvr->svr.sock);
+			tcpsvr->svr.state = 0;
+			return 0;
+		}
+	}
     
-    if ((sock=accept_nb(tcpsvr->svr.sock,(struct sockaddr *)&addr,&len))==(socket_t)-1) {
-        err=errsock();
-        sprintf(msg,"accept error (%d)",err);
-        tracet(1,"accsock: accept error sock=%d err=%d\n",tcpsvr->svr.sock,err);
-        closesocket(tcpsvr->svr.sock);
-        tcpsvr->svr.state=0;
-        return 0;
-    }
     if (sock==0) return 0;
     if (!setsock(sock,msg)) return 0;
     
     tcpsvr->cli[i].sock=sock;
-    memcpy(&tcpsvr->cli[i].addr,&addr,sizeof(addr));
-    strcpy(tcpsvr->cli[i].saddr,inet_ntoa(addr.sin_addr));
+	if (ip_type == 4) {
+		memcpy(&tcpsvr->cli[i].addr, &addr, sizeof(addr));
+		strcpy(tcpsvr->cli[i].saddr, inet_ntoa(addr.sin_addr));
+	}
+	else
+	{
+		memcpy(&tcpsvr->cli[i].addr6, &addr6, sizeof(addr6));
+		inet_ntop(AF_INET6, &addr6.sin6_addr, tcpsvr->cli[i].saddr, sizeof(tcpsvr->cli[i].saddr));
+	}
+    
     sprintf(msg,"%s",tcpsvr->cli[i].saddr);
     tracet(3,"accsock: connected sock=%d addr=%s i=%d\n",
            tcpsvr->cli[i].sock,tcpsvr->cli[i].saddr,i);
@@ -1216,13 +1355,13 @@ static int accsock(tcpsvr_t *tcpsvr, char *msg)
     return 1;
 }
 /* wait socket accept --------------------------------------------------------*/
-static int waittcpsvr(tcpsvr_t *tcpsvr, char *msg)
+static int waittcpsvr(tcpsvr_t *tcpsvr, char *msg, int ip_type)
 {
     tracet(4,"waittcpsvr: sock=%d state=%d\n",tcpsvr->svr.sock,tcpsvr->svr.state);
     
     if (tcpsvr->svr.state<=0) return 0;
     
-    while (accsock(tcpsvr,msg)) ;
+    while (accsock(tcpsvr,msg,ip_type)) ;
     
     updatetcpsvr(tcpsvr,msg);
     return tcpsvr->svr.state==2;
@@ -1234,7 +1373,7 @@ static int readtcpsvr(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
     
     tracet(4,"readtcpsvr: state=%d\n",tcpsvr->svr.state);
     
-    if (!waittcpsvr(tcpsvr,msg)) return 0;
+    if (!waittcpsvr(tcpsvr,msg,4)) return 0;
     
     for (i=0;i<MAXCLI;i++) {
         if (tcpsvr->cli[i].state!=2) continue;
@@ -1255,6 +1394,34 @@ static int readtcpsvr(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
     }
     return 0;
 }
+/* read ipv6 tcp server -----------------------------------------------------------*/
+static int readtcpsvr6(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
+{
+	int i, nr, err;
+
+	tracet(4, "readtcpsvr6: state=%d\n", tcpsvr->svr.state);
+
+	if (!waittcpsvr(tcpsvr, msg,6)) return 0;
+
+	for (i = 0; i < MAXCLI; i++) {
+		if (tcpsvr->cli[i].state != 2) continue;
+
+		if ((nr = recv_nb(tcpsvr->cli[i].sock, buff, n)) == -1) {
+			if ((err = errsock())) {
+				tracet(1, "readtcpsvr6: recv error sock=%d err=%d\n",
+					tcpsvr->cli[i].sock, err);
+			}
+			discontcp(&tcpsvr->cli[i], ticonnect);
+			updatetcpsvr(tcpsvr, msg);
+			return 0;
+		}
+		if (nr > 0) {
+			tcpsvr->cli[i].tact = tickget();
+			return nr;
+		}
+	}
+	return 0;
+}
 /* write tcp server ----------------------------------------------------------*/
 static int writetcpsvr(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
 {
@@ -1262,7 +1429,7 @@ static int writetcpsvr(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
     
     tracet(4,"writetcpsvr: state=%d n=%d\n",tcpsvr->svr.state,n);
     
-    if (!waittcpsvr(tcpsvr,msg)) return 0;
+    if (!waittcpsvr(tcpsvr,msg,4)) return 0;
     
     for (i=0;i<MAXCLI;i++) {
         if (tcpsvr->cli[i].state!=2) continue;
@@ -1279,6 +1446,31 @@ static int writetcpsvr(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
         if (ns>0) tcpsvr->cli[i].tact=tickget();
     }
     return ns;
+}
+/* write ipv6 tcp server ----------------------------------------------------------*/
+static int writetcpsvr6(tcpsvr_t *tcpsvr, unsigned char *buff, int n, char *msg)
+{
+	int i, ns = 0, err;
+
+	tracet(4, "writetcpsvr6: state=%d n=%d\n", tcpsvr->svr.state, n);
+
+	if (!waittcpsvr(tcpsvr, msg,6)) return 0;
+
+	for (i = 0; i < MAXCLI; i++) {
+		if (tcpsvr->cli[i].state != 2) continue;
+
+		if ((ns = send_nb(tcpsvr->cli[i].sock, buff, n)) == -1) {
+			if ((err = errsock())) {
+				tracet(1, "writetcpsvr6: send error i=%d sock=%d err=%d\n", i,
+					tcpsvr->cli[i].sock, err);
+			}
+			discontcp(&tcpsvr->cli[i], ticonnect);
+			updatetcpsvr(tcpsvr, msg);
+			return 0;
+		}
+		if (ns > 0) tcpsvr->cli[i].tact = tickget();
+	}
+	return ns;
 }
 /* get state tcp server ------------------------------------------------------*/
 static int statetcpsvr(tcpsvr_t *tcpsvr)
@@ -1320,7 +1512,7 @@ static int statextcpsvr(tcpsvr_t *tcpsvr, char *msg)
     return state;
 }
 /* connect server ------------------------------------------------------------*/
-static int consock(tcpcli_t *tcpcli, char *msg)
+static int consock(tcpcli_t *tcpcli, char *msg,int ip_type)
 {
     int stat,err;
     
@@ -1332,15 +1524,29 @@ static int consock(tcpcli_t *tcpcli, char *msg)
         return 0;
     }
     /* non-block connect */
-    if ((stat=connect_nb(tcpcli->svr.sock,(struct sockaddr *)&tcpcli->svr.addr,
-                         sizeof(tcpcli->svr.addr)))==-1) {
-        err=errsock();
-        sprintf(msg,"connect error (%d)",err);
-        tracet(2,"consock: connect error sock=%d err=%d\n",tcpcli->svr.sock,err);
-        closesocket(tcpcli->svr.sock);
-        tcpcli->svr.state=0;
-        return 0;
-    }
+	if (ip_type == 4) {
+		if ((stat = connect_nb(tcpcli->svr.sock, (struct sockaddr *)&tcpcli->svr.addr,
+			sizeof(tcpcli->svr.addr))) == -1) {
+			err = errsock();
+			sprintf(msg, "connect error (%d)", err);
+			tracet(2, "consock: connect error sock=%d err=%d\n", tcpcli->svr.sock, err);
+			closesocket(tcpcli->svr.sock);
+			tcpcli->svr.state = 0;
+			return 0;
+		}
+	}
+	else{
+		if ((stat = connect_nb(tcpcli->svr.sock, (struct sockaddr *)&tcpcli->svr.addr6,
+			sizeof(tcpcli->svr.addr6))) == -1) {
+			err = errsock();
+			sprintf(msg, "connect error (%d)", err);
+			tracet(2, "consock: connect error sock=%d err=%d\n", tcpcli->svr.sock, err);
+			closesocket(tcpcli->svr.sock);
+			tcpcli->svr.state = 0;
+			return 0;
+		}
+	}
+    
     if (!stat) { /* not connect */
         sprintf(msg,"connecting...");
         return 0;
@@ -1373,6 +1579,28 @@ static tcpcli_t *opentcpcli(const char *path, char *msg)
     tcpcli->tirecon=ticonnect;
     return tcpcli;
 }
+/* open tcp client based ipv6-----------------------------------------------------------*/
+static tcpcli_t *opentcpcli6(const char *path, char *msg)
+{
+	tcpcli_t *tcpcli, tcpcli0 = { {0} };
+	char port[256] = "";
+
+	tracet(3, "opentcpcli6: path=%s\n", path);
+
+	if (!(tcpcli = (tcpcli_t *)malloc(sizeof(tcpcli_t)))) return NULL;
+	*tcpcli = tcpcli0;
+	decodetcppath(path, tcpcli->svr.saddr, port, NULL, NULL, NULL, NULL);
+	if (sscanf(port, "%d", &tcpcli->svr.port) < 1) {
+		sprintf(msg, "port error: %s", port);
+		tracet(2, "opentcp6: port error port=%s\n", port);
+		free(tcpcli);
+		return NULL;
+	}
+	tcpcli->svr.tcon = 0;
+	tcpcli->toinact = toinact;
+	tcpcli->tirecon = ticonnect;
+	return tcpcli;
+}
 /* close tcp client ----------------------------------------------------------*/
 static void closetcpcli(tcpcli_t *tcpcli)
 {
@@ -1382,17 +1610,23 @@ static void closetcpcli(tcpcli_t *tcpcli)
     free(tcpcli);
 }
 /* wait socket connect -------------------------------------------------------*/
-static int waittcpcli(tcpcli_t *tcpcli, char *msg)
+static int waittcpcli(tcpcli_t *tcpcli, char *msg,int ip_type)
 {
     tracet(4,"waittcpcli: sock=%d state=%d\n",tcpcli->svr.sock,tcpcli->svr.state);
     
     if (tcpcli->svr.state<0) return 0;
     
-    if (tcpcli->svr.state==0) { /* close */
-        if (!gentcp(&tcpcli->svr,1,msg)) return 0;
+	if (tcpcli->svr.state == 0) { /* close */
+		if (ip_type == 4){
+			if (!gentcp(&tcpcli->svr, 1, msg)) return 0;
+		}
+		else
+		{
+			if (!gentcp(&tcpcli->svr, 3, msg)) return 0;
+		}
     }
     if (tcpcli->svr.state==1) { /* wait */
-        if (!consock(tcpcli,msg)) return 0;
+        if (!consock(tcpcli,msg, ip_type)) return 0;
     }
     if (tcpcli->svr.state==2) { /* connect */
         if (tcpcli->toinact>0&&
@@ -1412,7 +1646,7 @@ static int readtcpcli(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
     
     tracet(4,"readtcpcli: sock=%d\n",tcpcli->svr.sock);
     
-    if (!waittcpcli(tcpcli,msg)) return 0;
+    if (!waittcpcli(tcpcli,msg,4)) return 0;
     
     if ((nr=recv_nb(tcpcli->svr.sock,buff,n))==-1) {
         if ((err=errsock())) {
@@ -1429,6 +1663,30 @@ static int readtcpcli(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
     tracet(5,"readtcpcli: exit sock=%d nr=%d\n",tcpcli->svr.sock,nr);
     return nr;
 }
+/* read tcp client based ipv6-----------------------------------------------------------*/
+static int readtcpcli6(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
+{
+	int nr, err;
+
+	tracet(4, "readtcpcli6: sock=%d\n", tcpcli->svr.sock);
+
+	if (!waittcpcli(tcpcli, msg,6)) return 0;
+
+	if ((nr = recv_nb(tcpcli->svr.sock, buff, n)) == -1) {
+		if ((err = errsock())) {
+			tracet(2, "readtcpcli6: recv error sock=%d err=%d\n", tcpcli->svr.sock, err);
+			sprintf(msg, "recv error (%d)", err);
+		}
+		else {
+			sprintf(msg, "disconnected");
+		}
+		discontcp(&tcpcli->svr, tcpcli->tirecon);
+		return 0;
+	}
+	if (nr > 0) tcpcli->svr.tact = tickget();
+	tracet(5, "readtcpcli6: exit sock=%d nr=%d\n", tcpcli->svr.sock, nr);
+	return nr;
+}
 /* write tcp client ----------------------------------------------------------*/
 static int writetcpcli(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
 {
@@ -1436,7 +1694,7 @@ static int writetcpcli(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
     
     tracet(3,"writetcpcli: sock=%d state=%d n=%d\n",tcpcli->svr.sock,tcpcli->svr.state,n);
     
-    if (!waittcpcli(tcpcli,msg)) return 0;
+    if (!waittcpcli(tcpcli,msg,4)) return 0;
     
     if ((ns=send_nb(tcpcli->svr.sock,buff,n))==-1) {
         if ((err=errsock())) {
@@ -1452,6 +1710,30 @@ static int writetcpcli(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
     if (ns>0) tcpcli->svr.tact=tickget();
     tracet(5,"writetcpcli: exit sock=%d ns=%d\n",tcpcli->svr.sock,ns);
     return ns;
+}
+/* write tcp client based ipv6 ----------------------------------------------------------*/
+static int writetcpcli6(tcpcli_t *tcpcli, unsigned char *buff, int n, char *msg)
+{
+	int ns, err;
+
+	tracet(3, "writetcpcli6: sock=%d state=%d n=%d\n", tcpcli->svr.sock, tcpcli->svr.state, n);
+
+	if (!waittcpcli(tcpcli, msg,6)) return 0;
+
+	if ((ns = send_nb(tcpcli->svr.sock, buff, n)) == -1) {
+		if ((err = errsock())) {
+			tracet(2, "writetcp6: send error sock=%d err=%d\n", tcpcli->svr.sock, err);
+			sprintf(msg, "send error (%d)", err);
+		}
+		else {
+			sprintf(msg, "disconnected");
+		}
+		discontcp(&tcpcli->svr, tcpcli->tirecon);
+		return 0;
+	}
+	if (ns > 0) tcpcli->svr.tact = tickget();
+	tracet(5, "writetcpcli6: exit sock=%d ns=%d\n", tcpcli->svr.sock, ns);
+	return ns;
 }
 /* get state tcp client ------------------------------------------------------*/
 static int statetcpcli(tcpcli_t *tcpcli)
@@ -1992,7 +2274,7 @@ static void wait_ntripc(ntripc_t *ntripc, char *msg)
     
     ntripc->state=ntripc->tcp->svr.state;
     
-    if (!waittcpsvr(ntripc->tcp,msg)) return;
+    if (!waittcpsvr(ntripc->tcp,msg,4)) return;
     
     for (i=0;i<MAXCLI;i++) {
         if (ntripc->tcp->cli[i].state!=2||ntripc->con[i].state) continue;
@@ -2677,7 +2959,9 @@ extern void strinit(stream_t *stream)
 *                                 STR_SERIAL   = serial device
 *                                 STR_FILE     = file (record and playback)
 *                                 STR_TCPSVR   = TCP server
+*                                 STR_TCPSVR6   = TCP server based ipv6
 *                                 STR_TCPCLI   = TCP client
+*                                 STR_TCPCLI6  = TCP client based ipv6
 *                                 STR_NTRIPSVR = NTRIP server
 *                                 STR_NTRIPCLI = NTRIP client
 *                                 STR_NTRIPC_S = NTRIP caster server
@@ -2719,21 +3003,28 @@ extern void strinit(stream_t *stream)
 *                    swap  = output swap interval (hr) (0: no swap)
 *                    ::P={4|8} = file pointer size (4:32bit,8:64bit)
 *
-*   STR_TCPSVR   :port
+*   STR_TCPSVR   %port
 *                    port  = TCP server port to accept
 *
-*   STR_TCPCLI   addr:port
+*   STR_TCPCLI   addr%port
 *                    addr  = TCP server address to connect
 *                    port  = TCP server port to connect
 *
-*   STR_NTRIPSVR [:passwd@]addr[:port]/mponit[:string]
+*   STR_TCPSVR6   %port
+*                    port  = TCP server port to accept
+*
+*   STR_TCPCLI6   addr%port
+*                    addr  = TCP server ipv6 address to connect
+*                    port  = TCP server port to connect
+*
+*   STR_NTRIPSVR [:passwd@]addr[%port]/mponit[:string]
 *                    addr  = NTRIP caster address to connect
 *                    port  = NTRIP caster server port to connect
 *                    passwd= NTRIP caster server password to connect
 *                    mpoint= NTRIP mountpoint
 *                    string= NTRIP server string
 *
-*   STR_NTRIPCLI [user[:passwd]@]addr[:port]/mpoint
+*   STR_NTRIPCLI [user[:passwd]@]addr[%port]/mpoint
 *                    addr  = NTRIP caster address to connect
 *                    port  = NTRIP caster client port to connect
 *                    user  = NTRIP caster client user to connect
@@ -2806,6 +3097,8 @@ extern int stropen(stream_t *stream, int type, int mode, const char *path)
         case STR_MEMBUF  : stream->port=openmembuf(path,     stream->msg); break;
         case STR_FTP     : stream->port=openftp   (path,0,   stream->msg); break;
         case STR_HTTP    : stream->port=openftp   (path,1,   stream->msg); break;
+		case STR_TCPSVR6 : stream->port=opentcpsvr6(path,	 stream->msg); break;
+		case STR_TCPCLI6 : stream->port=opentcpcli6(path,	 stream->msg); break;
         default: stream->state=0; return 1;
     }
     stream->state=!stream->port?-1:1;
@@ -2837,6 +3130,8 @@ extern void strclose(stream_t *stream)
             case STR_MEMBUF  : closemembuf((membuf_t *)stream->port); break;
             case STR_FTP     : closeftp   ((ftp_t    *)stream->port); break;
             case STR_HTTP    : closeftp   ((ftp_t    *)stream->port); break;
+			case STR_TCPSVR6: closetcpsvr((tcpsvr_t *)stream->port); break;
+			case STR_TCPCLI6: closetcpcli((tcpcli_t *)stream->port); break;
         }
     }
     else {
@@ -2908,6 +3203,8 @@ extern int strread(stream_t *stream, unsigned char *buff, int n)
         case STR_MEMBUF  : nr=readmembuf((membuf_t *)stream->port,buff,n,msg); break;
         case STR_FTP     : nr=readftp   ((ftp_t    *)stream->port,buff,n,msg); break;
         case STR_HTTP    : nr=readftp   ((ftp_t    *)stream->port,buff,n,msg); break;
+		case STR_TCPSVR6  : nr=readtcpsvr6((tcpsvr_t *)stream->port,buff,n,msg); break;
+		case STR_TCPCLI6  : nr=readtcpcli6((tcpcli_t *)stream->port,buff,n,msg); break;
         default:
             strunlock(stream);
             return 0;
@@ -2955,6 +3252,8 @@ extern int strwrite(stream_t *stream, unsigned char *buff, int n)
         case STR_MEMBUF  : ns=writemembuf((membuf_t *)stream->port,buff,n,msg); break;
         case STR_FTP     :
         case STR_HTTP    :
+		case STR_TCPSVR6: ns = writetcpsvr6((tcpsvr_t *)stream->port, buff, n, msg); break;
+		case STR_TCPCLI6: ns = writetcpcli6((tcpcli_t *)stream->port, buff, n, msg); break;
         default:
             strunlock(stream);
             return 0;
@@ -3043,6 +3342,8 @@ extern int strstat(stream_t *stream, char *msg)
         case STR_MEMBUF  : state=statemembuf((membuf_t *)stream->port); break;
         case STR_FTP     : state=stateftp   ((ftp_t    *)stream->port); break;
         case STR_HTTP    : state=stateftp   ((ftp_t    *)stream->port); break;
+		case STR_TCPSVR6: state = statetcpsvr((tcpsvr_t *)stream->port); break;
+		case STR_TCPCLI6: state = statetcpcli((tcpcli_t *)stream->port); break;
         default:
             strunlock(stream);
             return 0;
@@ -3083,6 +3384,8 @@ extern int strstatx(stream_t *stream, char *msg)
         case STR_MEMBUF  : state=statexmembuf((membuf_t *)stream->port,msg); break;
         case STR_FTP     : state=statexftp   ((ftp_t    *)stream->port,msg); break;
         case STR_HTTP    : state=statexftp   ((ftp_t    *)stream->port,msg); break;
+		case STR_TCPSVR6: state = statextcpsvr((tcpsvr_t *)stream->port, msg); break;
+		case STR_TCPCLI6: state = statextcpcli((tcpcli_t *)stream->port, msg); break;
         default:
             msg[0]='\0';
             strunlock(stream);
@@ -3191,7 +3494,7 @@ extern void strsetopt(const int *opt)
 }
 /* set timeout time ------------------------------------------------------------
 * set timeout time
-* args   : stream_t *stream I   stream (STR_TCPCLI,STR_NTRIPCLI,STR_NTRIPSVR)
+* args   : stream_t *stream I   stream (STR_TCPCLI,STR_TCPCLI6,STR_NTRIPCLI,STR_NTRIPSVR)
 *          int     toinact  I   inactive timeout (ms) (0: no timeout)
 *          int     tirecon  I   reconnect interval (ms) (0: no reconnect)
 * return : none
@@ -3202,7 +3505,7 @@ extern void strsettimeout(stream_t *stream, int toinact, int tirecon)
     
     tracet(3,"strsettimeout: toinact=%d tirecon=%d\n",toinact,tirecon);
     
-    if (stream->type==STR_TCPCLI) {
+    if (stream->type==STR_TCPCLI||stream->type== STR_TCPCLI6) {
         tcpcli=(tcpcli_t *)stream->port;
     }
     else if (stream->type==STR_NTRIPCLI||stream->type==STR_NTRIPSVR) {
